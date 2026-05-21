@@ -1,4 +1,4 @@
-# MyOS
+# Shenzhen
 
 A hobby x86 operating system written in C.
 
@@ -70,6 +70,6 @@ qemu-system-i386 -kernel myos.elf
 
 ## Resources
 
-- https://wiki.osdev.org — the bible for hobby OS dev
+- https://wiki.osdev.org — the wiki for hobby OS dev
 - https://www.gnu.org/software/grub/manual/multiboot2/ — multiboot2 spec
 - Intel IA-32 Software Developer's Manual (free PDF from Intel)
