@@ -1,4 +1,4 @@
-# MyOS
+# Shenzhen
 
 A hobby x86 operating system written in C.
 
