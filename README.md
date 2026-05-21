@@ -1,5 +1,7 @@
 # Shenzhen
 
+This README is outdated
+
 A hobby x86 operating system written in C.
 
 ## Project structure
