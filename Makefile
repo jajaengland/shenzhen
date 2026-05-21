@@ -16,7 +16,7 @@ ASFLAGS := --32
 LDFLAGS := -m elf_i386 -T boot/linker.ld -nostdlib
 
 # --- Sources ---
-C_SRCS  := kernel/main.c kernel/vga.c kernel/gdt.c kernel/idt.c kernel/kprintf.c kernel/pmm.c kernel/heap.c kernel/process.c kernel/timer.c kernel/exceptions.c
+C_SRCS  := kernel/main.c kernel/vga.c kernel/gdt.c kernel/idt.c kernel/kprintf.c kernel/pmm.c kernel/heap.c kernel/process.c kernel/timer.c kernel/exceptions.c kernel/fs.c
 AS_SRCS := boot/boot.s boot/gdt_flush.s boot/idt_asm.s boot/process_asm.s boot/timer_asm.s boot/exceptions_asm.s
 
 C_OBJS  := $(C_SRCS:.c=.o)

@@ -69,15 +69,11 @@ process_t *process_create(const char *name, void (*entry)(void)) {
     p->stack = (uint8_t *)kmalloc(PROCESS_STACK_SIZE);
     if (!p->stack) { kprintf("process_create: no memory\n"); return 0; }
 
-    /* Set up stack for cooperative context_switch.
-       context_switch pushes: ebx, esi, edi, ebp, saves esp, then ret.
-       So new process stack needs: ebx, esi, edi, ebp, then ret addr.
-       When context_switch loads new esp and pops:
-         pop ebp, pop edi, pop esi, pop ebx, ret -> jumps to process_trampoline */
+    /* set up stack for cooperative context_switch:
+       context_switch pops: ebp, edi, esi, ebx, then ret */
     uint32_t *sp = (uint32_t *)(p->stack + PROCESS_STACK_SIZE);
-
     extern void process_trampoline(void);
-    *--sp = (uint32_t)process_trampoline;  /* ret address */
+    *--sp = (uint32_t)process_trampoline;  /* ret addr */
     *--sp = 0;                              /* ebp */
     *--sp = 0;                              /* edi */
     *--sp = 0;                              /* esi */
@@ -89,6 +85,12 @@ process_t *process_create(const char *name, void (*entry)(void)) {
     p->entry     = entry;
     kstrncpy(p->name, name, 32);
     p->regs.esp  = (uint32_t)sp;
+
+    /* set eip to trampoline — preempt_schedule will restore this into IRQ frame */
+    extern void process_trampoline(void);
+    p->regs.eip = (uint32_t)process_trampoline;
+    p->regs.eax = p->regs.ebx = p->regs.ecx = p->regs.edx = 0;
+    p->regs.esi = p->regs.edi = p->regs.ebp = 0;
 
     queue_add(p);
     kprintf("process: created '%s' (pid %d)\n", p->name, p->pid);
@@ -102,18 +104,15 @@ void process_run(void) {
 }
 
 void process_exit(void) {
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     kprintf("process: '%s' (pid %d) exited\n", current->name, current->pid);
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
     queue_remove(current);
     uint8_t *stack = current->stack;
-    current->state = PROC_UNUSED;
-    current->stack = 0;
-    current->next  = 0;
+    process_t *dying = current;
+    dying->state = PROC_UNUSED;
+    dying->stack = 0;
+    dying->next  = 0;
 
-    /* switch back to kernel process directly */
-    process_t *old = current;
-    /* find kernel process (pid 0) */
+    /* find kernel process */
     process_t *kern = 0;
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (processes[i].pid == 0 && processes[i].state != PROC_UNUSED) {
@@ -121,43 +120,47 @@ void process_exit(void) {
             break;
         }
     }
-    if (!kern) while(1);  /* kernel process gone — panic */
 
-    current = kern;
+    current = kern ? kern : &processes[0];
     current->state = PROC_RUNNING;
     kfree(stack);
 
-    context_switch(&old->regs, &current->regs);
+    /* restore kernel's cooperative stack directly */
+    __asm__ volatile (
+        "mov %0, %%esp\n\t"
+        "pop %%ebp\n\t"
+        "pop %%edi\n\t"
+        "pop %%esi\n\t"
+        "pop %%ebx\n\t"
+        "ret"
+        :: "r"(current->regs.esp)
+        : "memory"
+    );
+    while(1);
 }
 
 process_t *process_current(void) { return current; }
 
-/* Called from IRQ0 — saves current esp and returns next process esp */
-uint32_t preempt_save_and_pick(uint32_t cur_esp) {
-    if (!run_queue) return 0;
+/* IRQ frame layout after pusha + push ds/es */
+typedef struct {
+    uint32_t es, ds;
+    uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
+    uint32_t eip, cs, eflags;
+} irq_frame_t;
 
-    /* find a READY process that isn't current */
-    process_t *next = current->next;
-    int loops = 0;
-    while (next != current) {
-        if (next->state == PROC_READY) break;
-        next = next->next;
-        if (++loops > MAX_PROCESSES) return 0;
-    }
-    if (next == current) return 0;  /* no other ready process */
-
-    current->regs.esp = cur_esp;
-    if (current->state == PROC_RUNNING) current->state = PROC_READY;
-    current = next;
-    current->state = PROC_RUNNING;
-    return current->regs.esp;
+/* Called from IRQ0 with frame pointer.
+   Stack when called (from inside preempt_schedule):
+   [ret_addr]   <- esp in function
+   [esp_before_push] <- the arg we pushed = address of [es] slot
+   So frame = (irq_frame_t*)arg, where arg is what esp was before push %esp
+   Before push %esp: stack was [es][ds][edi]...[eflags]
+   So arg = address of es slot = frame base */
+void preempt_schedule(void *raw_frame) {
+    (void)raw_frame;
+    /* preemptive scheduling disabled — use cooperative yield() instead */
 }
-
-/* Called from IRQ0 assembly — preemptive scheduling disabled for now */
-uint32_t scheduler_pick(uint32_t cur_esp) {
-    (void)cur_esp;
-    return 0;
-}
+/* unused — kept for compatibility */
+uint32_t scheduler_pick(uint32_t cur_esp) { (void)cur_esp; return 0; }
 
 void yield(void) {
     scheduler_tick();

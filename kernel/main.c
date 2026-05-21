@@ -4,6 +4,7 @@
 #include "io.h"
 #include "kprintf.h"
 #include "pmm.h"
+#include "fs.h"
 #include "exceptions.h"
 #include "heap.h"
 #include "process.h"
@@ -118,8 +119,7 @@ static void test_process(void) {
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
         kprintf("[test process tick %d]\n", i);
         vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
-        /* busy wait so timer can preempt us */
-        for (volatile int j = 0; j < 5000000; j++);
+        yield();
     }
 }
 
@@ -137,6 +137,14 @@ static void run_command(const char *cmd) {
         vga_println("  spawn   - spawn a test process");
         vga_println("  yield   - run next process");
         vga_println("  panic   - trigger a test kernel panic");
+        vga_println("  pwd     - print working directory");
+        vga_println("  ls      - list directory contents");
+        vga_println("  cd      - change directory");
+        vga_println("  mkdir   - make a directory");
+        vga_println("  touch   - create a file");
+        vga_println("  cat     - print file contents");
+        vga_println("  write   - write text to a file");
+        vga_println("  rm      - delete a file or empty dir");
     } else if (kstrcmp(cmd, "clear") == 0) {
         vga_clear();
     } else if (kstrcmp(cmd, "mem") == 0) {
@@ -179,7 +187,122 @@ static void run_command(const char *cmd) {
         process_create("test", test_process);
         vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
         vga_println("Process created.");
-    } else if (kstrcmp(cmd, "panic") == 0) {
+        yield();  /* cooperative first switch — saves kernel esp */
+    } else if (kstrcmp(cmd, "pwd") == 0) {
+        char path[256];
+        fs_pwd(path, 256);
+        vga_set_color(VGA_WHITE, VGA_BLACK);
+        vga_println(path);
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+    } else if (kstrcmp(cmd, "ls") == 0) {
+        fs_node_t *dir = fs_cwd();
+        fs_node_t *child = dir->children;
+        if (!child) {
+            vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+            vga_println("(empty)");
+        }
+        while (child) {
+            if (child->type == FS_DIR) {
+                vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+                vga_print(child->name);
+                vga_println("/");
+            } else {
+                vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+                vga_println(child->name);
+            }
+            child = child->next;
+        }
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+    } else if (cmd[0]=='c' && cmd[1]=='d' && cmd[2]==' ') {
+        const char *arg = cmd + 3;
+        fs_node_t *target = fs_resolve(arg);
+        if (!target) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            kprintf("cd: no such directory: %s\n", arg);
+        } else if (target->type != FS_DIR) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            kprintf("cd: not a directory: %s\n", arg);
+        } else {
+            fs_set_cwd(target);
+        }
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+    } else if (cmd[0]=='m' && cmd[1]=='k' && cmd[2]=='d' && cmd[3]=='i' && cmd[4]=='r' && cmd[5]==' ') {
+        const char *arg = cmd + 6;
+        if (!fs_mkdir(fs_cwd(), arg)) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            kprintf("mkdir: cannot create '%s'\n", arg);
+            vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        }
+
+    } else if (cmd[0]=='t' && cmd[1]=='o' && cmd[2]=='u' && cmd[3]=='c' && cmd[4]=='h' && cmd[5]==' ') {
+        const char *arg = cmd + 6;
+        if (!fs_mkfile(fs_cwd(), arg)) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            kprintf("touch: cannot create '%s'\n", arg);
+            vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        }
+
+    } else if (cmd[0]=='c' && cmd[1]=='a' && cmd[2]=='t' && cmd[3]==' ') {
+        const char *arg = cmd + 4;
+        fs_node_t *file = fs_resolve(arg);
+        if (!file || file->type != FS_FILE) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            kprintf("cat: no such file: %s\n", arg);
+        } else if (file->size == 0) {
+            vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+            vga_println("(empty file)");
+        } else {
+            vga_set_color(VGA_WHITE, VGA_BLACK);
+            /* print file contents (null-terminate just in case) */
+            char buf[FS_MAX_DATA + 1];
+            int n = fs_read(file, buf, FS_MAX_DATA);
+            buf[n] = '\0';
+            vga_println(buf);
+        }
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+    } else if (cmd[0]=='w' && cmd[1]=='r' && cmd[2]=='i' && cmd[3]=='t' && cmd[4]=='e' && cmd[5]==' ') {
+        /* write <filename> <content> */
+        const char *arg = cmd + 6;
+        /* find space between filename and content */
+        const char *p = arg;
+        while (*p && *p != ' ') p++;
+        if (!*p) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            vga_println("usage: write <file> <text>");
+        } else {
+            char fname[FS_NAME_MAX];
+            int flen = (int)(p - arg);
+            if (flen >= FS_NAME_MAX) flen = FS_NAME_MAX - 1;
+            for (int i = 0; i < flen; i++) fname[i] = arg[i];
+            fname[flen] = '\0';
+            const char *content = p + 1;
+
+            fs_node_t *file = fs_resolve(fname);
+            if (!file) file = fs_mkfile(fs_cwd(), fname);
+            if (!file) {
+                vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+                kprintf("write: cannot open '%s'\n", fname);
+            } else {
+                fs_write(file, content, (uint32_t)kstrlen(content));
+            }
+        }
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+    } else if (cmd[0]=='r' && cmd[1]=='m' && cmd[2]==' ') {
+        const char *arg = cmd + 3;
+        fs_node_t *target = fs_resolve(arg);
+        if (!target) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            kprintf("rm: no such file: %s\n", arg);
+        } else if (fs_delete(target) != 0) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            vga_println("rm: directory not empty");
+        }
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
         __asm__ volatile ("ud2");  /* invalid instruction — triggers exception 6 */
     } else if (kstrcmp(cmd, "yield") == 0) {
         yield();
@@ -211,6 +334,7 @@ void kernel_main(struct mb_info *mb) {
     exceptions_init();
     pmm_init(mb);
     heap_init();
+    fs_init();
     process_init();
     timer_init(100);   /* 100 Hz = switch every 10ms */
     __asm__ volatile ("sti");

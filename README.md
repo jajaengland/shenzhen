@@ -1,6 +1,6 @@
 # MyOS
 
-A vibe coded x86 operating system written in C.
+A hobby x86 operating system written in C.
 
 ## Project structure
 

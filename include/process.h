@@ -37,5 +37,5 @@ void     process_exit(void);
 void     scheduler_tick(void);
 void     yield(void);
 uint32_t scheduler_pick(uint32_t cur_esp);
-uint32_t preempt_save_and_pick(uint32_t cur_esp);
+void preempt_schedule(void *frame);
 process_t *process_current(void);
